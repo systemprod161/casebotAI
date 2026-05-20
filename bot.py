@@ -1,159 +1,282 @@
 import asyncio
 import json
-import os
-import random
+import statistics
 import websockets
 
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 
-# =======================
-# CONFIG
-# =======================
+# ==========================================
+# TOKEN
+# ==========================================
+BOT_TOKEN = "8701511595:AAFhcipS4PB4pa8ygEqwFcCJiTwHFJ9-mMU"
 
-BOT_TOKEN = os.getenv("8701511595:AAFhcipS4PB4pa8ygEqwFcCJiTwHFJ9-mMU")
-
-WS_URL = "wss://ws3.gamecontent.io/"
-
+# ==========================================
+# TELEGRAM
+# ==========================================
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-# память статистики
-stats = {
-    "total_drops": 0,
-    "high_value": 0,
-    "low_value": 0,
-    "history": []
-}
+# ==========================================
+# WEBSOCKET
+# ==========================================
+WS_URL = "wss://ws3.gamecontent.io/"
 
-subscribers = set()
+# ==========================================
+# DATA
+# ==========================================
+last_drops = []
+site_state = "UNKNOWN"
 
-# =======================
-# WS ANALYZER
-# =======================
+# ==========================================
+# MENU
+# ==========================================
+menu = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="📊 AI Анализ")],
+        [KeyboardButton(text="🎯 Лучшие кейсы")],
+        [KeyboardButton(text="⚡ AI Апгрейд")],
+        [KeyboardButton(text="🧠 AI Риск")],
+    ],
+    resize_keyboard=True
+)
 
-def analyze_drop(drop):
-    """простая логика анализа"""
-    price = drop.get("price", 0)
+# ==========================================
+# AI FUNCTIONS
+# ==========================================
+def detect_site_state():
+    global site_state
 
-    stats["total_drops"] += 1
-    stats["history"].append(price)
+    if len(last_drops) < 20:
+        return "Недостаточно данных"
 
-    if price >= 100:
-        stats["high_value"] += 1
+    expensive = 0
+    cheap = 0
+
+    for drop in last_drops[-20:]:
+        price = drop.get("price", 0)
+
+        if price >= 100:
+            expensive += 1
+        else:
+            cheap += 1
+
+    if expensive > cheap:
+        site_state = "СЕЙЧАС ВЫДАЕТ"
     else:
-        stats["low_value"] += 1
+        site_state = "СЕЙЧАС СЛИВАЕТ"
 
+    return site_state
 
-def get_advice(budget: float):
-    """простые советы"""
-    if stats["total_drops"] < 10:
-        return "⚠️ Недостаточно данных для анализа"
+def ai_score():
+    if len(last_drops) < 10:
+        return 50
 
-    avg = sum(stats["history"]) / len(stats["history"])
+    values = [x.get("price", 0) for x in last_drops[-20:]]
 
-    risk = stats["high_value"] / stats["total_drops"]
+    avg = statistics.mean(values)
 
-    if budget < 10:
-        return "❌ Бюджет слишком маленький, риск высокий"
+    if avg > 100:
+        return 90
 
-    if risk > 0.4:
-        return "🔥 Сайт сейчас 'жирный', можно пробовать средние кейсы"
+    if avg > 50:
+        return 75
 
-    if avg < 50:
-        return "⚠️ Сейчас слабая отдача, лучше не рисковать"
+    if avg > 20:
+        return 60
 
-    return "🟡 Ситуация средняя, играй аккуратно, не ставь больше 10–20% банка"
+    return 35
 
+def get_best_cases(balance):
+    balance = float(balance)
 
-# =======================
-# WS LOOP
-# =======================
+    if balance < 5:
+        return [
+            "Starter Case",
+            "Cheap Knife",
+            "Budget Case"
+        ]
 
-async def ws_worker():
+    if balance < 20:
+        return [
+            "Knife Fever",
+            "Red Boost",
+            "Classified"
+        ]
+
+    if balance < 100:
+        return [
+            "Premium Knife",
+            "Dragon Case",
+            "High Roller"
+        ]
+
+    return [
+        "Elite Dragon",
+        "Titanium",
+        "Legendary"
+    ]
+
+def ai_upgrade(balance):
+    balance = float(balance)
+
+    state = detect_site_state()
+
+    if state == "СЕЙЧАС СЛИВАЕТ":
+        return "AI советует НЕ делать апгрейд сейчас"
+
+    if balance < 10:
+        return "AI советует 20% upgrade"
+
+    if balance < 50:
+        return "AI советует 30% upgrade"
+
+    return "AI советует 40% upgrade"
+
+# ==========================================
+# WEBSOCKET
+# ==========================================
+async def websocket_listener():
+    global last_drops
+
     while True:
         try:
             async with websockets.connect(WS_URL) as ws:
-                print("WS CONNECTED")
+                print("CONNECTED TO WS")
 
                 while True:
                     msg = await ws.recv()
 
                     try:
                         data = json.loads(msg)
+
+                        if isinstance(data, dict):
+                            last_drops.append(data)
+
+                            if len(last_drops) > 200:
+                                last_drops = last_drops[-200:]
+
                     except:
-                        continue
-
-                    # если пришёл дроп
-                    if isinstance(data, dict):
-                        analyze_drop(data)
-
-                        text = f"🎁 Дроп: {data.get('price', 0)}"
-
-                        # отправка всем подписчикам
-                        for uid in subscribers:
-                            try:
-                                await bot.send_message(uid, text)
-                            except:
-                                pass
+                        pass
 
         except Exception as e:
             print("WS ERROR:", e)
             await asyncio.sleep(5)
 
-
-# =======================
-# TELEGRAM COMMANDS
-# =======================
-
+# ==========================================
+# START
+# ==========================================
 @dp.message(Command("start"))
-async def start(msg: types.Message):
-    subscribers.add(msg.chat.id)
-
-    await msg.answer(
-        "🤖 Бот запущен\n\n"
-        "Команды:\n"
-        "/stats - статистика\n"
-        "/advice <budget> - совет по бюджету\n"
+async def start(message: types.Message):
+    text = (
+        "🧠 AI CASE BOT PRO V2\n\n"
+        "Функции:\n"
+        "• AI анализ сайта\n"
+        "• AI риск движок\n"
+        "• Лучшие кейсы\n"
+        "• AI апгрейды\n"
+        "• Анализ выдачи\n"
+        "• Анализ сливов\n"
     )
 
+    await message.answer(text, reply_markup=menu)
 
-@dp.message(Command("stats"))
-async def get_stats(msg: types.Message):
-    if stats["total_drops"] == 0:
-        await msg.answer("Нет данных")
-        return
+# ==========================================
+# ANALYSIS
+# ==========================================
+@dp.message(lambda message: message.text == "📊 AI Анализ")
+async def ai_analysis(message: types.Message):
 
-    avg = sum(stats["history"]) / len(stats["history"])
+    state = detect_site_state()
+    score = ai_score()
 
-    await msg.answer(
-        f"📊 Статистика:\n"
-        f"Всего дропов: {stats['total_drops']}\n"
-        f"Высоких: {stats['high_value']}\n"
-        f"Низких: {stats['low_value']}\n"
-        f"Среднее: {round(avg, 2)}"
+    text = (
+        f"📊 AI Анализ\n\n"
+        f"Состояние сайта: {state}\n"
+        f"AI SCORE: {score}/100\n"
+        f"Drops в памяти: {len(last_drops)}"
     )
 
+    await message.answer(text)
 
-@dp.message(Command("advice"))
-async def advice(msg: types.Message):
-    try:
-        budget = float(msg.text.split()[1])
-    except:
-        await msg.answer("Используй: /advice 100")
-        return
+# ==========================================
+# BEST CASES
+# ==========================================
+@dp.message(lambda message: message.text == "🎯 Лучшие кейсы")
+async def best_cases(message: types.Message):
+    await message.answer("💰 Напиши свой баланс")
 
-    await msg.answer(get_advice(budget))
+# ==========================================
+# BALANCE HANDLER
+# ==========================================
+@dp.message(lambda message: message.text.replace('.', '').isdigit())
+async def budget_handler(message: types.Message):
 
+    balance = float(message.text)
 
-# =======================
+    cases = get_best_cases(balance)
+
+    upgrade = ai_upgrade(balance)
+
+    text = (
+        f"💰 Баланс: ${balance}\n\n"
+        f"🎯 Лучшие кейсы:\n"
+    )
+
+    for case in cases:
+        text += f"• {case}\n"
+
+    text += (
+        f"\n⚡ AI Upgrade:\n"
+        f"{upgrade}\n"
+    )
+
+    await message.answer(text)
+
+# ==========================================
+# RISK
+# ==========================================
+@dp.message(lambda message: message.text == "🧠 AI Риск")
+async def risk_command(message: types.Message):
+
+    state = detect_site_state()
+
+    if state == "СЕЙЧАС СЛИВАЕТ":
+        text = (
+            "🚨 AI считает что сайт сейчас сливает\n"
+            "Лучше не рисковать"
+        )
+    else:
+        text = (
+            "✅ AI считает что сайт сейчас выдает\n"
+            "Можно делать осторожные апгрейды"
+        )
+
+    await message.answer(text)
+
+# ==========================================
+# UPGRADE
+# ==========================================
+@dp.message(lambda message: message.text == "⚡ AI Апгрейд")
+async def upgrade_command(message: types.Message):
+
+    text = (
+        "⚡ Напиши баланс\n"
+        "AI рассчитает upgrade стратегию"
+    )
+
+    await message.answer(text)
+
+# ==========================================
 # MAIN
-# =======================
-
+# ==========================================
 async def main():
-    asyncio.create_task(ws_worker())
-    await dp.start_polling(bot)
 
+    await asyncio.gather(
+        websocket_listener(),
+        dp.start_polling(bot)
+    )
 
 if __name__ == "__main__":
     asyncio.run(main())
