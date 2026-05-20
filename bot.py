@@ -11,7 +11,7 @@ from aiogram.filters import Command
 # CONFIG
 # =======================
 
-BOT_TOKEN = os.getenv("8701511595:AAFr8dOEvt2O3nP3LqqbahuTvci5tX0jYkM")
+BOT_TOKEN = os.getenv("8701511595:AAFhcipS4PB4pa8ygEqwFcCJiTwHFJ9-mMU")
 
 WS_URL = "wss://ws3.gamecontent.io/"
 
